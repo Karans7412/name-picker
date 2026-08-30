@@ -103,6 +103,32 @@
   .remain { text-align:center; font-size:13px; color:#999; padding-bottom:6px; }
   .confetti { position:absolute; width:12px; height:12px; pointer-events:none; }
 
+  /* ===== 앱 내 입력창 (prompt/confirm 대체 — 태블릿 홈화면 앱에서도 동작) ===== */
+  #modal {
+    position:fixed; inset:0; z-index:9000; display:flex; align-items:center; justify-content:center;
+    background:rgba(0,0,0,.35);
+  }
+  .modal-card {
+    background:#fff; border-radius:20px; padding:22px 20px; width:86%; max-width:340px;
+    box-shadow:0 10px 30px rgba(0,0,0,.2);
+  }
+  .modal-title { font-size:18px; font-weight:800; color:#5b6cff; margin-bottom:14px; text-align:center; }
+  #modalInput {
+    width:100%; font-size:20px; padding:12px 14px; border:2px solid #ffd1e3; border-radius:14px; outline:none;
+  }
+  #modalInput:focus { border-color:#ff5fa2; }
+  .modal-btns { display:flex; gap:10px; margin-top:16px; }
+  .modal-btns .btn { flex:1; font-size:17px; padding:13px; }
+  #modalCancel { background:#f1f3f9; color:#666; }
+  #modalOk { background:linear-gradient(135deg,#ff8a5f,#ff5fa2); color:#fff; }
+  #toast {
+    position:fixed; left:50%; bottom:90px; transform:translateX(-50%); z-index:9500;
+    background:rgba(50,50,60,.92); color:#fff; font-size:15px; font-weight:700;
+    padding:12px 20px; border-radius:14px; pointer-events:none; opacity:0; transition:opacity .25s;
+    max-width:86vw; text-align:center;
+  }
+  #toast.show { opacity:1; }
+
   /* ===== 비밀번호 잠금 ===== */
   #lock {
     position:fixed; inset:0; z-index:9999; display:flex; flex-direction:column;
@@ -159,7 +185,7 @@
   </div>
 
   <div class="card">
-    <h2>👤 Add Names <span id="cntBadge" class="count-badge">0 / 9</span></h2>
+    <h2>👤 Add Names</h2>
     <div class="add-row">
       <input id="nameInput" type="text" placeholder="Enter a name" maxlength="12" autocomplete="off">
       <button class="btn add-btn" id="addBtn">＋ Add</button>
@@ -196,6 +222,18 @@
   </div>
 </div>
 
+<div id="modal" class="hidden">
+  <div class="modal-card">
+    <div class="modal-title" id="modalTitle"></div>
+    <input id="modalInput" type="text" maxlength="16" autocomplete="off">
+    <div class="modal-btns">
+      <button class="btn" id="modalCancel">Cancel</button>
+      <button class="btn" id="modalOk">OK</button>
+    </div>
+  </div>
+</div>
+<div id="toast"></div>
+
 <script>
 "use strict";
 
@@ -228,11 +266,23 @@ try{ if(sessionStorage.getItem("np_ok")==="1") lockEl.style.display="none"; else
 
 // ===== 소리 (브라우저 내장 합성음, 설치/파일 불필요) =====
 var SOUND_KEY="prep_namepicker_sound";
-var AC=null, lastClick=0;
+var AC=null, masterGain=null, lastClick=0;
 var soundOn=(function(){ try{ return localStorage.getItem(SOUND_KEY)!=="off"; }catch(e){ return true; } })();
 function audioInit(){
-  if(AC) { if(AC.state==="suspended") AC.resume(); return; }
-  try{ AC=new (window.AudioContext||window.webkitAudioContext)(); }catch(e){ AC=null; }
+  if(AC) { if(AC.state==="suspended" && soundOn) AC.resume(); return; }
+  try{
+    AC=new (window.AudioContext||window.webkitAudioContext)();
+    masterGain=AC.createGain();
+    masterGain.gain.value = soundOn ? 1 : 0;
+    masterGain.connect(AC.destination);
+  }catch(e){ AC=null; masterGain=null; }
+}
+// 켜기/끄기를 확실하게: 플래그 + 마스터 볼륨 0 + 오디오 엔진 정지 (3중)
+function applySound(){
+  try{
+    if(masterGain) masterGain.gain.value = soundOn ? 1 : 0;
+    if(AC){ if(soundOn){ if(AC.state==="suspended") AC.resume(); } else { AC.suspend(); } }
+  }catch(e){}
 }
 function tone(freq,dur,type,vol,slideTo){
   if(!AC||!soundOn) return;
@@ -243,7 +293,7 @@ function tone(freq,dur,type,vol,slideTo){
   g.gain.setValueAtTime(0.0001,t);
   g.gain.exponentialRampToValueAtTime(vol||0.2,t+0.01);
   g.gain.exponentialRampToValueAtTime(0.0001,t+dur);
-  o.connect(g); g.connect(AC.destination);
+  o.connect(g); g.connect(masterGain||AC.destination);
   o.start(t); o.stop(t+dur+0.02);
 }
 function sfxClick(){ // 공이 벽에 부딪히는 톡 소리 (너무 잦지 않게)
@@ -261,12 +311,50 @@ function sfxWin(){ // 띠-리-링 팡파레
     o.type="square"; o.frequency.value=f;
     g.gain.setValueAtTime(0.0001,t); g.gain.exponentialRampToValueAtTime(0.22,t+0.02);
     g.gain.exponentialRampToValueAtTime(0.0001,t+0.32);
-    o.connect(g); g.connect(AC.destination); o.start(t); o.stop(t+0.34);
+    o.connect(g); g.connect(masterGain||AC.destination); o.start(t); o.stop(t+0.34);
   });
 }
 
 // 공 색상 팔레트 (최대 9개)
 var PALETTE = ["#ff6b8a","#5b9bff","#ffb74a","#5fd0a0","#b07cff","#ff8a5f","#4ec3e0","#ff5fa2","#8ac94a"];
+
+// ===== 앱 내 입력창/확인창 (prompt·confirm은 태블릿 홈화면 앱에서 안 떠서 대체) =====
+var modalEl=document.getElementById("modal");
+var modalTitleEl=document.getElementById("modalTitle");
+var modalInputEl=document.getElementById("modalInput");
+var modalOkEl=document.getElementById("modalOk");
+var modalCancelEl=document.getElementById("modalCancel");
+var modalCb=null;
+function askText(title, def, cb){
+  modalTitleEl.textContent=title;
+  modalInputEl.style.display="";
+  modalInputEl.value=def||"";
+  modalCb=cb;
+  modalEl.classList.remove("hidden");
+  setTimeout(function(){ try{ modalInputEl.focus(); modalInputEl.select(); }catch(e){} },50);
+}
+function askConfirm(title, cb){
+  modalTitleEl.textContent=title;
+  modalInputEl.style.display="none";
+  modalCb=cb;
+  modalEl.classList.remove("hidden");
+}
+function closeModal(){ modalEl.classList.add("hidden"); modalCb=null; }
+modalOkEl.onclick=function(){
+  var cb=modalCb, v=modalInputEl.style.display==="none" ? true : modalInputEl.value;
+  closeModal();
+  if(cb) cb(v);
+};
+modalCancelEl.onclick=closeModal;
+modalInputEl.addEventListener("keydown",function(e){ if(e.key==="Enter") modalOkEl.onclick(); });
+
+var toastEl=document.getElementById("toast"), toastT=null;
+function toast(msg){
+  toastEl.textContent=msg;
+  toastEl.classList.add("show");
+  clearTimeout(toastT);
+  toastT=setTimeout(function(){ toastEl.classList.remove("show"); },1800);
+}
 
 // ===== 반별 저장 =====
 var KEY = "prep_namepicker_v2";
@@ -305,7 +393,6 @@ var nameInput = document.getElementById("nameInput");
 var addBtn = document.getElementById("addBtn");
 var nameList = document.getElementById("nameList");
 var startBtn = document.getElementById("startBtn");
-var cntBadge = document.getElementById("cntBadge");
 
 function modeInfo(mode){
   if(mode==="star") return {cls:"on-star", txt:"special"};
@@ -335,7 +422,6 @@ function renderList(){
     li.appendChild(dot); li.appendChild(txt); li.appendChild(tag); li.appendChild(del);
     nameList.appendChild(li);
   });
-  cntBadge.textContent = people.length + " / " + MAX;
   startBtn.disabled = people.length===0;
 }
 
@@ -344,7 +430,7 @@ function recolor(){ people.forEach(function(p,i){ p.color=PALETTE[i%PALETTE.leng
 function addName(){
   var v=nameInput.value.trim();
   if(!v) return;
-  if(people.length>=MAX){ alert("You can add up to "+MAX+" names."); return; }
+  if(people.length>=MAX){ toast("You can add up to "+MAX+" names."); return; }
   people.push({name:v, mode:"normal", color:PALETTE[people.length%PALETTE.length]});
   nameInput.value=""; nameInput.focus(); saveDB(); renderList();
 }
@@ -363,20 +449,24 @@ function renderClasses(){
 function useClass(){ people = cls().people; recolor(); }
 classSel.onchange = function(){ DB.curId = classSel.value; saveDB(); useClass(); renderList(); };
 document.getElementById("newClsBtn").onclick = function(){
-  var n = prompt("New class name", "New class"); if(n===null) return;
-  var c = { id:newId(), name:(n.trim()||"New class"), people:[] };
-  DB.classes.push(c); DB.curId = c.id; saveDB(); renderClasses(); useClass(); renderList();
+  askText("New class name", "", function(n){
+    var c = { id:newId(), name:(String(n).trim()||"New class"), people:[] };
+    DB.classes.push(c); DB.curId = c.id; saveDB(); renderClasses(); useClass(); renderList();
+  });
 };
 document.getElementById("renameBtn").onclick = function(){
-  var c = cls(); var n = prompt("Class name", c.name); if(n===null) return;
-  c.name = n.trim() || c.name; saveDB(); renderClasses();
+  var c = cls();
+  askText("Class name", c.name, function(n){
+    c.name = String(n).trim() || c.name; saveDB(); renderClasses();
+  });
 };
 document.getElementById("delClsBtn").onclick = function(){
-  if(DB.classes.length<=1){ alert("You need at least one class."); return; }
+  if(DB.classes.length<=1){ toast("You need at least one class."); return; }
   var c = cls();
-  if(!confirm('Delete "'+c.name+'"? Its name list will be deleted too.')) return;
-  DB.classes = DB.classes.filter(function(x){ return x.id!==c.id; });
-  DB.curId = DB.classes[0].id; saveDB(); renderClasses(); useClass(); renderList();
+  askConfirm('Delete "'+c.name+'"? Its name list will be deleted too.', function(){
+    DB.classes = DB.classes.filter(function(x){ return x.id!==c.id; });
+    DB.curId = DB.classes[0].id; saveDB(); renderClasses(); useClass(); renderList();
+  });
 };
 
 startBtn.onclick=function(){
@@ -444,7 +534,7 @@ function initMachine(){
 
 function updateRemain(){
   var pool=people.filter(function(p){ return p.mode!=="ban" && winners.indexOf(p.name)<0; });
-  remainEl.textContent = pool.length+" left · "+people.length+" total";
+  remainEl.textContent = ""; // 학생수·남은 수 비공개 (숫자 노출 금지)
   drawBtn.disabled = pool.length===0 || drawing;
   drawBtn.textContent = pool.length===0 ? "Done! 🎊" : "PICK 🎯";
 }
@@ -613,11 +703,15 @@ function finishDraw(){
 
 var soundBtn=document.getElementById("soundBtn");
 function renderSoundBtn(){ soundBtn.textContent = soundOn ? "🔊 Sound" : "🔇 Muted"; }
-soundBtn.onclick=function(){
+function toggleSound(){
   soundOn=!soundOn;
   try{ localStorage.setItem(SOUND_KEY, soundOn?"on":"off"); }catch(e){}
   renderSoundBtn();
-};
+  applySound();
+}
+soundBtn.onclick=toggleSound;
+// 일부 태블릿에서 click이 안 잡히는 경우 대비 — touchend로도 처리(중복 방지 위해 기본 click 취소)
+soundBtn.addEventListener("touchend",function(e){ e.preventDefault(); toggleSound(); },{passive:false});
 renderSoundBtn();
 
 resetBtn.onclick=function(){ initMachine(); };
